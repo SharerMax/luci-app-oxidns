@@ -2,7 +2,7 @@
 
 记录排查过程中发现的、按优先级排序的问题。每条包含：现象、证据、影响、建议修法。
 
-最近核对：2026-11-16，逐条对照 `luci-app-oxidns@561bd16` 与上游 `../oxidns`（1.7.1）；定性结论全部成立，`luci.oxidns` 行号已校正到该版本。
+最近核对：2026-11-16，对照 `origin/main@bf12212`（早期基线 `561bd16`，其内容已经 PR #5 重放入 main；1367422 重写了 #4 相关逻辑）与上游 `../oxidns`（1.7.1）；定性结论全部成立，`luci.oxidns` 行号已校正到 bf12212。
 
 约定：
 - **P1** 会导致功能不可用或数据/文件损坏
@@ -23,8 +23,8 @@
 - **证据**：
   - `minimal` 归档里的 `config.yaml` 其实是 `config.minimal.yaml` 改名而来（`../oxidns/.github/workflows/release.yml:382-384`）。
   - `../oxidns/config.minimal.yaml:14-18` 把整个 `api:` 块注释掉了：`# api:` / `#   http:` / `#     listen: ":9199"` / `#     webui:` / `#       root: "./webui"`。workflow 自己的注释也写了 `# minimal: ship the dedicated minimal config (no api/webui block)`。
-  - `root/usr/libexec/rpcd/luci.oxidns:1364` 的顶层键匹配 `/^[^[:space:]#][^:]*:/` 已经显式排除了注释行（说明作者当时考虑过注释），但 `listen_done` 只在 `luci.oxidns:1383` 才置位、`root_done` 只在 `luci.oxidns:1388` 才置位。`END`（`luci.oxidns:1392-1395`）无条件要求两者都为真，否则 `exit 42`。
-  - 两个调用点都把 exit 42 转成 `default_config_unsupported`：`install_core_from_release`（`luci.oxidns:1515-1518`）和 `install_uploaded_core_from_unpack`（`luci.oxidns:1705-1708`）。
+  - `root/usr/libexec/rpcd/luci.oxidns:1403` 的顶层键匹配 `/^[^[:space:]#][^:]*:/` 已经显式排除了注释行（说明作者当时考虑过注释），但 `listen_done` 只在 `luci.oxidns:1422` 才置位、`root_done` 只在 `luci.oxidns:1427` 才置位。`END`（`luci.oxidns:1431-1434`）无条件要求两者都为真，否则 `exit 42`。
+  - 两个调用点都把 exit 42 转成 `default_config_unsupported`：`install_core_from_release`（`luci.oxidns:1554-1557`）和 `install_uploaded_core_from_unpack`（`luci.oxidns:1751-1754`）。
 - **影响**：`minimal` bundle 实际不可用。`full` / `standard` 不受影响（它们用未注释的 `config.yaml`）。
 - **建议**：`write_openwrt_default_config` 区分两种失败。若源文件根本不含未注释的 `api.http` 块，则不做改写、直接原样落盘（`minimal` 本来就没有管理 API，改写无意义）；只有"有 `api:` 块但缺 `listen` / `webui.root` 子键"才报 `default_config_unsupported`。需要在 `integration-check.sh` 里加一份注释掉 `api:` 块的 `config.yaml` 固件，两个安装路径都要覆盖。
 
@@ -33,12 +33,12 @@
 - **状态**：待处理
 - **现象**：`Settings` 里把 `Config path` 填成 `/usr/bin/oxidns` 能通过校验并保存；随后在 `Configuration` 页保存任意 YAML，就会把配置文件 `mv` 到内核二进制路径上。
 - **证据**：
-  - `valid_config_path_setting` → `safe_remove_config_path` → `oxidns_named_path`。后者只检查 basename 或父目录名是否含 `oxidns`（`luci.oxidns:809-820`，核心判断在 `814-818` 的 `case "$BASE_NAME:$DIR_BASE" in *oxidns*|*:oxidns*)`）。`/usr/bin/oxidns` 的 basename 就是 `oxidns`，拼出 `oxidns:bin`，命中 `*oxidns*` → 通过。
-  - `emit_config_save` 校验的是**内容**（`validate_config_file "$TMP_FILE"`，对临时文件，`luci.oxidns:929`），不是目标路径。校验通过后直接 `mv "$TMP_FILE" "$CONFIG_PATH"`（`luci.oxidns:940`）。
-  - 会先 `cp` 一份备份到 `$WORKING_DIR/config-backups/`（`luci.oxidns:936-939`），所以二进制通常还能找回，但服务已经起不来了。
+  - `valid_config_path_setting` → `safe_remove_config_path` → `oxidns_named_path`。后者只检查 basename 或父目录名是否含 `oxidns`（`luci.oxidns:848-859`，核心判断在 `853-857` 的 `case "$BASE_NAME:$DIR_BASE" in *oxidns*|*:oxidns*)`）。`/usr/bin/oxidns` 的 basename 就是 `oxidns`，拼出 `oxidns:bin`，命中 `*oxidns*` → 通过。
+  - `emit_config_save` 校验的是**内容**（`validate_config_file "$TMP_FILE"`，对临时文件，`luci.oxidns:968`），不是目标路径。校验通过后直接 `mv "$TMP_FILE" "$CONFIG_PATH"`（`luci.oxidns:979`）。
+  - 会先 `cp` 一份备份到 `$WORKING_DIR/config-backups/`（`luci.oxidns:975-978`），所以二进制通常还能找回，但服务已经起不来了。
 - **影响**：误操作即可破坏内核安装。
 - **建议**：`oxidns_named_path` 太宽松。建议单独加一个"绝不能作为写入目标"的显式黑名单（`$OXIDNS_BIN`、`$WEBUI_DIR`、`/etc/init.d/oxidns`、`/etc/config/oxidns`、`/etc/passwd`…）外加可执行/库目录前缀拒绝（`/bin/*`、`/sbin/*`、`/usr/bin/*`、`/usr/sbin/*`、`/lib/*`、`/usr/lib/*`、`/www/*`）。
-- **参考**：~~`valid_log_path_setting` 里的黑名单 + 目录前缀拒绝~~ —— 2026-11-16 核对：`log_path` / `valid_log_path_setting` 在本仓库全 git 历史中均不存在（`git log --all -S` 验证），系误记。现成可借用的模式是 `safe_remove_working_dir` 的顶层目录黑名单（`luci.oxidns:833-846`），但它不含可执行/库目录前缀拒绝，需按本条建议补全。
+- **参考**：~~`valid_log_path_setting` 里的黑名单 + 目录前缀拒绝~~ —— 2026-11-16 核对：`log_path` / `valid_log_path_setting` 在本仓库全 git 历史中均不存在（`git log --all -S` 验证），系误记。现成可借用的模式是 `safe_remove_working_dir` 的顶层目录黑名单（`luci.oxidns:872-885`），但它不含可执行/库目录前缀拒绝，需按本条建议补全。
 
 ### 3. Settings 无条件提供三种 bundle，但 slim bundle 只有两个 target
 
@@ -47,32 +47,35 @@
 - **证据**：
   - `../oxidns/.github/workflows/release.yml:310-320`：slim matrix 只有 `minimal`/`standard` × `x86_64-unknown-linux-musl`/`aarch64-unknown-linux-musl`。
   - `htdocs/.../settings.js` 的 `bundleSelect`（`settings.js:63-70`）固定渲染 `full`/`standard`/`minimal` 三项，不看架构。
-  - `asset_name_for_bundle`（`luci.oxidns:1165-1179`）只按 bundle + target 拼名字（`full` → `oxidns-<target>.tar.gz`，注意 full 没有 bundle 段），拼完由 `select_release_asset` 去 release 里找，找不到就报 `release_asset_not_found`。
+  - `asset_name_for_bundle`（`luci.oxidns:1204-1218`）只按 bundle + target 拼名字（`full` → `oxidns-<target>.tar.gz`，注意 full 没有 bundle 段），拼完由 `select_release_asset` 去 release 里找，找不到就报 `release_asset_not_found`。
 - **影响**：在非 x86_64/aarch64 设备上 UI 提供了必然失败的选项，排查成本高。
 - **建议**：`settings_read` 或 `status` 额外返回当前 target 可用的 bundle 列表，前端据此只渲染可选项；或至少在 `asset_name_for_bundle` 失败时给出"该架构不发布 standard/minimal，请改用 full"的明确 `detail`。
 
 ### 4. `log_syslog` 改动后，`restart` 不生效，但 `stop` + `start` 生效
 
-- **状态**：已修复（4c11591，app 层用 `run_init_action` 拆分 restart；rc.common/procd 本身属上游，未改也无法改）
+- **状态**：已修复并二次强化（4c11591 拆分 restart；1367422 增加 stop 等待，随 PR #5 进入 `origin/main`）
 - **现象**：`Settings` 里改“写入系统日志”并保存后：
   - `/etc/init.d/oxidns stop` 再 `/etc/init.d/oxidns start` → **生效**
   - `/etc/init.d/oxidns restart`（Overview 的 Restart 按钮）→ **不生效**，服务仍按旧的 `stdout`/`stderr` 跑
   - 两个方向都如此。`enable`/`disable` 完全无关（见 #7）。
-- **根因**：procd 版的 `stop` 会 `procd_lock`，而解锁发生在脚本 EXIT 的 trap 里；procd 版的 `start` **不上锁**。
-  - `restart` 走的是 `rc.common` 开头那个通用实现（procd 块只重定义了 `start`/`stop`/`reload`/`running`/`status`，**没有重定义 `restart`**），即单进程内 `stop` 再 `start`。于是 `procd_kill` 和随后的 `procd_close_service "set"`（在 `start_service` 里带新 `stdout`/`stderr`）**全程持有 procd 锁**，新实例定义走延迟处理路径，没有按新的 `log_syslog` 重新声明。
-  - `stop` + `start` 是两次独立脚本执行：第一次退出时 EXIT trap 释放锁，第二次 `start` 不加锁，`procd_close_service "set"` 立即生效。
-- **证据来源**：真机 `/etc/rc.common`（Raspberry Pi 4，OpenWrt 21.02 系列，用 `$IPKG_INSTROOT`）：
-  ```sh
-  restart() { trap '' TERM; stop "$@"; trap - TERM; start "$@"; }   # 通用版，procd 未覆盖
-  stop()    { procd_lock; stop_service "$@"; procd_kill ...; }        # 上锁，EXIT trap 才解锁
-  start()   { rc_procd start_service "$@"; }                          # 不上锁
-  rc_procd(){ local method="set"; [ -n "$2" ] && method="add"
-              procd_open_service ...; "$@"; procd_close_service "$method"; }
-  ```
-- **修法（已入库）**：`run_service` 里的 `run_init_action` 把 `restart` 拆成 `"$INIT" stop && "$INIT" start` 两次独立调用，从而让新实例定义在未加锁状态下提交。代价是两次脚本调用而非一次，重启窗口与原生 `restart` 基本一致。
-- **未完全确认**：procd 在持锁状态下处理 `set` 请求的**具体**内部路径需要看 `package/system/procd/files/service.c` 才能 100% 闭环。不过「锁的作用域差异」是这份 `rc.common` 里可以直接读出的唯一结构性差异，且绕过方案用的正是实测有效路径，风险可控。
-- **另一个独立遗留疑点**：即使实例定义重新声明了，`procd_set_param stdout 0` 本身能否完全摘掉 stdio 仍未验证 —— procd 把 `stdout` 当「是否转发到 syslog 的布尔量」，传字符串 `"0"` 与「省略参数」未必等价。若关闭后 console 仍出现 oxidns 输出（`dmesg | tail` 可验证），那是另一个问题（见 #8）。
-- **待补测试**：`run_init_action` 的 restart 拆分仍无法单测 —— `init_script()` 返回硬编码的 `/etc/init.d/oxidns`，而 `load_settings` 不再读 `service_name`，测试无法替换该路径。验证只能靠真机：改设置 → Overview 点 Restart → 确认 `logread` 行为符合预期。已部分覆盖：561bd16 起 `integration-check.sh` 直接 source 仓库内真实 init 脚本，断言 `start_service` 写出的 `stdout`/`stderr` 参数随 `log_syslog` 0/1 变化；仍未覆盖的只剩 rpcd 侧 `run_init_action` 的拆分调用本身。
+- **根因**：两层，均已证实。
+  - 第一层（真机 `/etc/rc.common`，Raspberry Pi 4 / OpenWrt 21.02）：通用 `restart` 未被 procd 覆盖，在单进程内先 stop 后 start；procd 版 `stop` 全程持有 `procd_lock`（EXIT trap 才解锁）、`start` 不上锁，`procd_close_service "set"` 在持锁状态下提交，新实例定义走延迟处理路径，没有按新的 `log_syslog` 重新声明。`stop` + `start` 是两次独立脚本执行，第一次退出时释放锁，第二次 `start` 不加锁、立即生效。
+  - 第二层（1367422 证实并写入代码注释）：**procd stop 是异步的**——`stop` 返回时旧实例可能尚未移除；start 早于移除会复用旧实例定义，procd 的实例更新保留旧 `stdout`/`stderr`。这是「拆成两次调用仍可能不生效」的原因。
+- **证据来源**：
+  - 真机 `/etc/rc.common`（Raspberry Pi 4，OpenWrt 21.02 系列，用 `$IPKG_INSTROOT`）：
+    ```sh
+    restart() { trap '' TERM; stop "$@"; trap - TERM; start "$@"; }   # 通用版，procd 未覆盖
+    stop()    { procd_lock; stop_service "$@"; procd_kill ...; }        # 上锁，EXIT trap 才解锁
+    start()   { rc_procd start_service "$@"; }                          # 不上锁
+    rc_procd(){ local method="set"; [ -n "$2" ] && method="add"
+                procd_open_service ...; "$@"; procd_close_service "$method"; }
+    ```
+  - `luci.oxidns:539-576` 新增 `stop_service_and_wait`：`"$init_path" stop` 后轮询 `ubus -t 2 call service list '{"name":"oxidns"}'`（jsonfilter 校验响应形状），直到 `instances` 为空，10 秒超时（`luci.oxidns:549`）；函数头注释即第二层根因原文。
+- **修法（已入库，两步演进）**：
+  - 4c11591：`run_service` 的 `run_init_action` 把 `restart` 拆成两次独立调用。
+  - 1367422（现行为）：`restart` → `stop_service_and_wait "$1" && "$1" start`，`stop` 也走等待（`luci.oxidns:578-590`）；`emit_config_save` 的 restart 改走 `run_init_action`（`luci.oxidns:991`，旧实现直接调 `$INIT restart`，同样受本条影响）；core 安装/上传的 stop 从 `"$INIT" stop || true` 改为硬失败，新增错误码 `service_stop_failed`（`luci.oxidns:1570`、`luci.oxidns:1766`）。
+- **遗留疑点**：即使实例定义按新参数重建，`procd_set_param stdout 0` 能否完全摘掉 stdio 仍未验证 —— procd 把 `stdout` 当「是否转发到 syslog 的布尔量」，传字符串 `"0"` 与「省略参数」未必等价。若关闭后 console 仍出现 oxidns 输出（`dmesg | tail` 可验证），那是另一个问题（见 #8）。
+- **测试**：`scripts/service-check.sh`（1367422 新增，281 行）以假 ubus 轮询单测 `stop_service_and_wait`——覆盖 query_failed / invalid_json / invalid_root / invalid_shape / empty_service / empty_instances 与超时路径（假时钟推进，避免真实等待）；`check.sh:75` 挂了 `sh -n`，`integration-check.sh:96` 直接调用，`integration-check.sh:79-92` 继续以 source 仓库内 init 脚本的方式断言 stdout/stderr 参数随 `log_syslog` 变化。真机端到端（改设置 → Overview 点 Restart → 确认 `logread` 行为）仍待最终确认一次。
 
 ---
 
@@ -81,8 +84,8 @@
 ### 5. `minimal` bundle 不含 `webui/`，但配置改写仍会写入 `webui.root`
 
 - **状态**：待处理（与 #1 同源，修 #1 时一并考虑）
-- **证据**：`release.yml:376-385` 的 minimal 打包只 `tar czf ... oxidns config.yaml LICENSE`，没有 `webui`。而 `write_openwrt_default_config` 的 `luci.oxidns:1386-1390` 会把 `api.http.webui.root` 改写成 `/usr/share/oxidns/webui`。
-- **注意**：`install_core_from_release` 拷贝 WebUI 的分支（`luci.oxidns:1536`）是 `if [ -d "$UNPACK_DIR/webui" ]`，所以 minimal 缺 `webui/` 不会报错，只是静默跳过 —— 也就是说配置被改写了但目录不存在，属于"半成功"状态。
+- **证据**：`release.yml:376-385` 的 minimal 打包只 `tar czf ... oxidns config.yaml LICENSE`，没有 `webui`。而 `write_openwrt_default_config` 的 `luci.oxidns:1425-1429` 会把 `api.http.webui.root` 改写成 `/usr/share/oxidns/webui`。
+- **注意**：`install_core_from_release` 拷贝 WebUI 的分支（`luci.oxidns:1582`）是 `if [ -d "$UNPACK_DIR/webui" ]`，所以 minimal 缺 `webui/` 不会报错，只是静默跳过 —— 也就是说配置被改写了但目录不存在，属于"半成功"状态。
 - **影响**：修完 #1 之后，minimal 安装虽然能成功，但配置里会指向一个不存在的 WebUI 目录。
 - **建议**：#1 里判断到"无 `api:` 块"时整体跳过改写，天然规避此问题。若将来让 minimal 支持 WebUI，需要先确认内核侧 `webui` cargo feature 在 minimal 下是否启用（按 `../oxidns` 的 feature 定义，`webui = ["api"]`，minimal 大概率没有）。
 
@@ -133,7 +136,7 @@
 ### 12. 归档布局是硬约束：根目录平铺，无套子目录
 
 - **证据**：`release.yml:262-271` 用 `tar czf … -C "$DIR" "$EXE" config.yaml LICENSE webui`；`config.yaml` 恒定存在于根（minimal 是改名而来）。
-- **影响**：`install_core_from_release` 硬编码 `$UNPACK_DIR/oxidns`（检查在 `luci.oxidns:1501`）、`$UNPACK_DIR/config.yaml`（`luci.oxidns:1509`）、`$UNPACK_DIR/webui`（`luci.oxidns:1536`）。上游哪天加一层目录就会静默失败。
+- **影响**：`install_core_from_release` 硬编码 `$UNPACK_DIR/oxidns`（检查在 `luci.oxidns:1540`）、`$UNPACK_DIR/config.yaml`（`luci.oxidns:1548`）、`$UNPACK_DIR/webui`（`luci.oxidns:1582`）。上游哪天加一层目录就会静默失败。
 - **建议**：可以在 integration-check 里加一条针对真实 release 归档布局的断言，或至少在 `AGENTS.md` 的"仓库关系"里写明这条契约。
 
 ---
@@ -158,7 +161,7 @@
 
 ### 16. rpcd 后端已突破 2000 行 shell
 
-- **证据**：`root/usr/libexec/rpcd/luci.oxidns` 2017 行、93 个函数（2026-11-16 实测），同时承担 JSON 构造、HTTP 下载、归档校验、YAML 改写、配置写回、UCI 读写、日志读取、进度日志、锁管理等职责。
+- **证据**：`root/usr/libexec/rpcd/luci.oxidns` 2070 行、94 个函数（2026-11-16 实测，bf12212），同时承担 JSON 构造、HTTP 下载、归档校验、YAML 改写、配置写回、UCI 读写、日志读取、进度日志、锁管理等职责。
 - **现状**：有 `check.sh` 的 `sh -n` 和 `integration-check.sh` 的行为断言兜底，暂未失控。
 - **建议**：暂不重构。若继续加功能，优先考虑把"归档校验 + 下载"或"YAML 改写"抽成独立脚本，让主文件只做分发。2026-11-16 已定稿完整重构方案（拆分为 sourced 库文件，含分步落地与测试升级），见 review-doc/design/rpcd-backend-refactor.md。
 
